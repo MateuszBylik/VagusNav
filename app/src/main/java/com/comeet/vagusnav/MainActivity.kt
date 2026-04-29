@@ -4,9 +4,16 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.location.LocationManager
 import android.os.Bundle
+import android.os.Looper
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.MapLibre
@@ -15,6 +22,7 @@ import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.location.permissions.PermissionsListener
 import org.maplibre.android.location.permissions.PermissionsManager
 import org.maplibre.android.location.LocationComponentActivationOptions
+import org.maplibre.android.location.engine.LocationEngineRequest
 import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.location.modes.RenderMode
 import org.maplibre.android.maps.MapLibreMap
@@ -27,10 +35,15 @@ class MainActivity : AppCompatActivity(), PermissionsListener {
     private var mapLibreMap: MapLibreMap? = null
     private var permissionsManager: PermissionsManager = PermissionsManager(this)
 
+    private lateinit var fusedLocationClient: FusedLocationProviderClient
+    private var locationCallback: LocationCallback? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         MapLibre.getInstance(this)
         setContentView(R.layout.activity_main)
+
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
         mapView = findViewById(R.id.mapView)
         mapView?.onCreate(savedInstanceState)
@@ -78,8 +91,27 @@ class MainActivity : AppCompatActivity(), PermissionsListener {
 
                 // 2. Jeśli lokalizacja działa
                 if (isFacingNorth) {
-                    // Jesteśmy na północy -> włączamy śledzenie kierunku (to wycentruje mapę na użytkowniku)
-                    map.locationComponent.cameraMode = CameraMode.TRACKING_COMPASS
+                    val lastLoc = map.locationComponent.lastKnownLocation
+                    if (lastLoc != null) {
+                        // Tworzymy punkt przelotu na pozycję gracza
+                        val position = CameraPosition.Builder()
+                            .target(LatLng(lastLoc.latitude, lastLoc.longitude))
+                            .zoom(16.0)
+                            .build()
+
+                        // Lecimy do gracza (500ms), a GDY WYLĄDUJEMY, włączamy śledzenie kompasu
+                        map.animateCamera(CameraUpdateFactory.newCameraPosition(position), 500, object : MapLibreMap.CancelableCallback {
+                            override fun onFinish() {
+                                map.locationComponent.cameraMode = CameraMode.TRACKING_COMPASS
+                            }
+                            override fun onCancel() {
+                                map.locationComponent.cameraMode = CameraMode.TRACKING_COMPASS
+                            }
+                        })
+                    } else {
+                        // Zabezpieczenie na wypadek braku fixa GPS
+                        map.locationComponent.cameraMode = CameraMode.TRACKING_COMPASS
+                    }
                     Toast.makeText(this, "Śledzenie kierunku włączone", Toast.LENGTH_SHORT).show()
                 } else {
                     // Mapa jest obrócona -> tylko "północujemy" bez przesuwania środka
@@ -106,8 +138,8 @@ class MainActivity : AppCompatActivity(), PermissionsListener {
 
             mapLibreMap?.let { map ->
                 if (map.locationComponent.isLocationComponentActivated) {
-                    // Wyśrodkuj na mnie, ale NIE OBRAZAJ mapy
                     map.locationComponent.cameraMode = CameraMode.TRACKING
+                    map.locationComponent.zoomWhileTracking(14.0, 500)
                 } else {
                     map.style?.let { style -> enableLocationComponent(style) }
                 }
@@ -137,32 +169,42 @@ class MainActivity : AppCompatActivity(), PermissionsListener {
     private fun enableLocationComponent(loadedMapStyle: Style) {
         if (PermissionsManager.areLocationPermissionsGranted(this) && isSystemLocationEnabled()) {
             val locationComponent = mapLibreMap?.locationComponent
-            val locationComponentActivationOptions = LocationComponentActivationOptions.builder(this, loadedMapStyle).build()
+
+            val locationComponentActivationOptions = LocationComponentActivationOptions.builder(this, loadedMapStyle)
+                .useDefaultLocationEngine(false)
+                .build()
 
             locationComponent?.activateLocationComponent(locationComponentActivationOptions)
             locationComponent?.isLocationComponentEnabled = true
 
-            // UWAGA: Nie ustawiamy od razu CameraMode.TRACKING, żeby uniknąć skoku na (0,0) przed fixem GPS.
-            // Ustawiamy NONE, co pozwoli mapie zostać na domyślnych koordynatach do czasu kliknięcia FAB lub fixa.
-            locationComponent?.cameraMode = CameraMode.NONE
+            locationComponent?.cameraMode = CameraMode.TRACKING
             locationComponent?.renderMode = RenderMode.COMPASS
-            
-            // Próbujemy wycentrować tylko jeśli mamy już jakąś znaną lokalizację
-            locationComponent?.lastKnownLocation?.let {
-                val position = CameraPosition.Builder()
-                    .target(LatLng(it.latitude, it.longitude))
-                    .zoom(12.0)
-                    .build()
-                mapLibreMap?.animateCamera(CameraUpdateFactory.newCameraPosition(position))
-                locationComponent.cameraMode = CameraMode.TRACKING
-            }
+
+            startHighAccuracyLocationUpdates()
         } else {
-            // Jeśli brak uprawnień/GPS - mapa zostaje na domyślnych (ustawionych w getMapAsync)
             if (!PermissionsManager.areLocationPermissionsGranted(this)) {
                 permissionsManager = PermissionsManager(this)
                 permissionsManager.requestLocationPermissions(this)
             }
         }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startHighAccuracyLocationUpdates() {
+        // Żądamy wysokiego priorytetu i aktualizacji co 1 sekundę
+        val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L).build()
+
+        locationCallback = object : LocationCallback() {
+            override fun onLocationResult(locationResult: LocationResult) {
+                super.onLocationResult(locationResult)
+                locationResult.lastLocation?.let { location ->
+                    // Gdy tylko satelita odpowie, ładujemy współrzędne siłą do MapLibre
+                    mapLibreMap?.locationComponent?.forceLocationUpdate(location)
+                }
+            }
+        }
+
+        fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback!!, Looper.getMainLooper())
     }
 
     // Wymagane metody PermissionsListener
@@ -184,8 +226,13 @@ class MainActivity : AppCompatActivity(), PermissionsListener {
     }
 
     override fun onStart() { super.onStart(); mapView?.onStart() }
-    override fun onResume() { super.onResume(); mapView?.onResume() }
-    override fun onPause() { super.onPause(); mapView?.onPause() }
+    override fun onResume() {
+        super.onResume(); mapView?.onResume()
+        if (PermissionsManager.areLocationPermissionsGranted(this) && isSystemLocationEnabled() && locationCallback != null) {
+            startHighAccuracyLocationUpdates()
+        }
+    }
+    override fun onPause() { super.onPause(); mapView?.onPause(); locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) } }
     override fun onStop() { super.onStop(); mapView?.onStop() }
     override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); mapView?.onSaveInstanceState(outState) }
     override fun onLowMemory() { super.onLowMemory(); mapView?.onLowMemory() }

@@ -14,8 +14,8 @@ android {
         applicationId = "com.comeet.vagusnav"
         minSdk = 24
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.1.0-alpha"
+        versionCode = 4
+        versionName = "1.1.1-alpha"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -42,6 +42,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.material)
     implementation(libs.map.libre)
+    implementation(libs.play.services.location)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
