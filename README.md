@@ -36,7 +36,7 @@ Projekt łączy dane z OpenStreetMap (OSM) z autorskim systemem uczenia się naw
 ## 🗺️ Roadmap projektu
 
 - [x] Konfiguracja serwera backendowego (FastAPI + Scraping)
-- [ ] Implementacja MapLibre w Android Studio
+- [x] Implementacja MapLibre w Android Studio
 - [ ] Kompilacja grafu GraphHopper dla Torunia (OSM + GTFS)
 - [ ] System logowania śladów GPS do lokalnej bazy
 - [ ] Moduł "AI Learning" - automatyczna modyfikacja wag krawędzi grafu
